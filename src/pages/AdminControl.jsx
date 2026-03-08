@@ -166,7 +166,7 @@ async function fetchExistingArticles(config) {
   const cmsFilePath = `${owner}/${repo}/contents/src/data/articles-cms.json`
   try {
     const cmsData = await ghGet(cmsFilePath, token)
-    const decoded = atob(cmsData.content.replace(/\s/g, ''))
+    const decoded = decodeURIComponent(escape(atob(cmsData.content.replace(/\s/g, ''))))
     const articles = JSON.parse(decoded)
     return { articles, sha: cmsData.sha }
   } catch {
@@ -220,7 +220,8 @@ export default function AdminControl() {
 
   // ── Preview modal ──
   const [showPreview, setShowPreview] = useState(false)
-  const [previewMd, setPreviewMd] = useState('')
+  const [previewMd, setPreviewMd] = useState('')          // Immediate — drives the textarea
+  const [renderedMd, setRenderedMd] = useState('')        // Debounced — drives ReactMarkdown
   const [previewAccepted, setPreviewAccepted] = useState(false)
 
   // ── Edit existing ──
@@ -237,6 +238,12 @@ export default function AdminControl() {
   useEffect(() => {
     setPreviewAccepted(false)
   }, [rawMd])
+
+  // Debounce ReactMarkdown updates — keeps textarea instant, render updates 350ms after pause
+  useEffect(() => {
+    const timer = setTimeout(() => setRenderedMd(previewMd), 350)
+    return () => clearTimeout(timer)
+  }, [previewMd])
 
   // ── Config handlers ──
 
@@ -299,6 +306,7 @@ export default function AdminControl() {
   function openPreview() {
     if (!parsed || !rawMd) return
     setPreviewMd(rawMd)
+    setRenderedMd(rawMd)   // Pre-fill so right panel appears instantly with no 350ms blank flash
     setShowPreview(true)
   }
 
@@ -411,7 +419,7 @@ export default function AdminControl() {
       try {
         const cmsData = await ghGet(cmsFilePath, token)
         cmsSha = cmsData.sha
-        existingArr = JSON.parse(atob(cmsData.content.replace(/\s/g, '')))
+        existingArr = JSON.parse(decodeURIComponent(escape(atob(cmsData.content.replace(/\s/g, '')))))
       } catch {}
 
       // ── Build article object ──
@@ -567,7 +575,7 @@ export default function AdminControl() {
                   {/* ── Article Body ── */}
                   <div className="preview-body-wrap">
                     <div className="article-body preview-article-body">
-                      <ReactMarkdown>{previewMd}</ReactMarkdown>
+                      <ReactMarkdown>{renderedMd}</ReactMarkdown>
                     </div>
                   </div>
 
