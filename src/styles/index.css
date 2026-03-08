@@ -1,0 +1,86 @@
+/* === DESIGN TOKENS === */
+:root {
+  --bg: #0C0A0A;
+  --surface: #141010;
+  --surface-2: #1C1515;
+  --border: #2A2020;
+  --accent-gold: #D4760A;
+  --accent-red: #8B1A1A;
+  --accent-glow: #E8920C;
+  --text-primary: #F0E8D8;
+  --text-secondary: #9A8070;
+  --text-accent: #D4760A;
+
+  --font-mono: 'IBM Plex Mono', monospace;
+  --font-display: 'Cormorant Garamond', serif;
+  --font-body: 'Spectral', serif;
+
+  --radius: 4px;
+  --transition: 200ms ease;
+}
+
+/* === RESET === */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-family: inherit;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+/* === GRADIENT THUMBNAIL === */
+.gradient-thumb {
+  width: 100%;
+  height: 100%;
+  background-size: cover;
+}
+
+/* === SCROLLBAR === */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-gold); }
+
+/* === ANIMATIONS === */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
