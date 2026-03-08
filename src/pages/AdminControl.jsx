@@ -1,8 +1,9 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import ReactMarkdown from 'react-markdown'
 import '../styles/admin.css'
 
-// ── Helpers ────────────────────────────────────────────────────────────────
+// ── Markdown Helpers ────────────────────────────────────────────────────────
 
 function slugify(str) {
   return str
@@ -13,43 +14,97 @@ function slugify(str) {
     .slice(0, 60)
 }
 
-function stripPromptHeader(md) {
-  // Discard everything above and including the *** separator (Perplexity prompt block)
-  const sepIdx = md.indexOf('\n***\n')
-  if (sepIdx !== -1) return md.slice(sepIdx + 5).trimStart()
-  const sepIdx2 = md.indexOf('\n---\n')
-  if (sepIdx2 !== -1 && sepIdx2 < 300) return md.slice(sepIdx2 + 5).trimStart()
-  return md
-}
-
-function stripFootnotes(md) {
-  // Remove footnote reference lines at the bottom: [^1]: ...
-  return md.replace(/\n\[\^[^\]]+\]:[^\n]*/g, '').trimEnd()
-}
-
+/**
+ * Process raw markdown from multiple document formats:
+ *
+ * Format A (Perplexity-style):
+ *   [Prompt header block]
+ *   ***
+ *   # Article Title
+ *   ...body...
+ *   [^1]: Reference
+ *
+ * Format B (Clean/direct):
+ *   ***
+ *   # **Article Title** (bold-wrapped H1)
+ *   *italic essence line*
+ *   ## I. Roman numeral section
+ *   ...body...
+ *   ---
+ *   ## References
+ *   1. [link]
+ */
 function processMarkdown(raw) {
-  let md = stripPromptHeader(raw)
-  md = stripFootnotes(md)
-  // Remove inline footnote citations like [^1] [^2] etc.
-  md = md.replace(/\[\^[^\]]+\]/g, '')
-  // Remove HTML spans (hidden references)
+  let md = raw.trim()
+
+  // ── Step 1: Strip decorative opening *** (always) ──
+  // If document starts with *** (possibly whitespace around it), remove it
+  if (/^\*\*\*\s*$/m.test(md.split('\n')[0])) {
+    md = md.replace(/^\*\*\*[^\n]*\n/, '').trimStart()
+  }
+
+  // ── Step 2: Strip prompt header block (Format A) ──
+  // If there's content before the first H1, check for a *** separator
+  const firstH1 = md.search(/^#\s/m)
+  if (firstH1 > 0) {
+    const beforeH1 = md.slice(0, firstH1)
+    // Look for *** separator in the preamble
+    const sepIdx = beforeH1.lastIndexOf('\n***\n')
+    if (sepIdx !== -1) {
+      md = md.slice(sepIdx + 5).trimStart()
+    }
+    // Also handle --- separator appearing very early (within 300 chars)
+    const dashSep = beforeH1.lastIndexOf('\n---\n')
+    if (dashSep !== -1 && dashSep < 300) {
+      md = md.slice(dashSep + 5).trimStart()
+    }
+  }
+
+  // ── Step 3: Clean bold-wrapped H1: # **Title** → # Title ──
+  md = md.replace(/^(#{1,6})\s+\*\*(.+?)\*\*\s*$/gm, '$1 $2')
+
+  // ── Step 4: Strip inline footnote citations [^1] [^24] etc. ──
+  md = md.replace(/\[\^\d+\](?:\[\^\d+\])*/g, '')
+
+  // ── Step 5: Strip References section and everything after ──
+  // Handles: \n---\n\n## References or \n## References
+  md = md.replace(/\n---+\n+## References[\s\S]*$/m, '')
+  md = md.replace(/\n## References\n[\s\S]*$/m, '')
+
+  // ── Step 6: Strip footnote reference definitions [^1]: ... ──
+  md = md.replace(/\n\[\^[^\]]+\]:[^\n]*/g, '')
+
+  // ── Step 7: Remove hidden HTML spans and tags ──
   md = md.replace(/<[^>]+>/g, '')
-  // Remove closing ornament
+
+  // ── Step 8: Remove closing ornament ──
   md = md.replace(/\n\s*⁂\s*\n?$/m, '')
+  md = md.replace(/\n\s*\* \* \*\s*\n?$/m, '')
+
   return md.trim()
 }
 
 function parseArticle(md) {
-  // Extract H1 title
-  const titleMatch = md.match(/^#\s+(.+)$/m)
-  const title = titleMatch ? titleMatch[1].replace(/^#+\s*/, '').trim() : 'Untitled'
+  // Extract H1 title (already cleaned of **)
+  const titleMatch = md.match(/^#{1}\s+(.+)$/m)
+  const rawTitle = titleMatch ? titleMatch[1].trim() : 'Untitled'
+  // Also strip any remaining ** in title (safety net)
+  const title = rawTitle.replace(/\*\*/g, '').trim()
 
-  // Extract subtitle: first H2 or first non-empty paragraph after title
+  // Extract subtitle: first italic line or first substantial paragraph after title
   const afterTitle = md.replace(/^#[^\n]*\n/, '').trimStart()
-  const firstParaMatch = afterTitle.match(/^([^#\n][^\n]{10,})/m)
-  const subtitle = firstParaMatch ? firstParaMatch[1].slice(0, 160).trim() : ''
 
-  // Word count
+  // Try italic/emphasis first (common in Format B: *italic essence line*)
+  const italicMatch = afterTitle.match(/^\*([^*\n]{10,})\*\s*$/m)
+  // Then try first paragraph
+  const parasMatch = afterTitle.match(/^([^#\n*][^\n]{10,})/m)
+  const subtitle = italicMatch
+    ? italicMatch[1].slice(0, 200).trim()
+    : parasMatch
+    ? parasMatch[1].slice(0, 200).trim()
+    : ''
+
+  // Word count (rough - count words in the cleaned body)
   const wordCount = md.split(/\s+/).filter(Boolean).length
 
   // Read time (~200 wpm)
@@ -71,7 +126,6 @@ function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => {
-      // strip the data URL prefix: "data:...;base64,"
       const b64 = reader.result.split(',')[1]
       resolve(b64)
     }
@@ -80,7 +134,7 @@ function fileToBase64(file) {
   })
 }
 
-// ── GitHub API helpers ──────────────────────────────────────────────────────
+// ── GitHub API helpers ───────────────────────────────────────────────────────
 
 async function ghGet(path, token) {
   const res = await fetch(`https://api.github.com/repos/${path}`, {
@@ -107,7 +161,20 @@ async function ghPut(path, token, body) {
   return res.json()
 }
 
-// ── Component ───────────────────────────────────────────────────────────────
+async function fetchExistingArticles(config) {
+  const { token, owner, repo } = config
+  const cmsFilePath = `${owner}/${repo}/contents/src/data/articles-cms.json`
+  try {
+    const cmsData = await ghGet(cmsFilePath, token)
+    const decoded = atob(cmsData.content.replace(/\s/g, ''))
+    const articles = JSON.parse(decoded)
+    return { articles, sha: cmsData.sha }
+  } catch {
+    return { articles: [], sha: undefined }
+  }
+}
+
+// ── Constants ────────────────────────────────────────────────────────────────
 
 const CATEGORIES = [
   'AI & Infrastructure',
@@ -115,46 +182,63 @@ const CATEGORIES = [
   'Science & Technology',
 ]
 
-const DEFAULT_GRADIENT = 'radial-gradient(ellipse at 30% 40%, #8B1A1A 0%, #D4760A 40%, #0C0A0A 75%)'
+const GRADIENTS = [
+  'radial-gradient(ellipse at 25% 35%, #8B1A1A 0%, #D4760A 45%, #1A0A02 75%, #0C0A0A 100%)',
+  'radial-gradient(ellipse at 25% 35%, #1B3A6B 0%, #2E7D9F 45%, #0C0A0A 80%)',
+  'radial-gradient(ellipse at 70% 40%, #2D5016 0%, #4A7C59 45%, #0C0A0A 80%)',
+  'radial-gradient(ellipse at 50% 30%, #4A1942 0%, #8B2FC9 50%, #0C0A0A 80%)',
+  'radial-gradient(ellipse at 30% 60%, #1A3A5C 0%, #C17A2B 60%, #0C0A0A 85%)',
+]
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function AdminControl() {
   const navigate = useNavigate()
 
-  // ── GitHub config state ──
+  // ── GitHub config ──
   const [config, setConfig] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem('tr33via_admin_config') || 'null') || {
-        token: '', owner: '', repo: '',
-      }
+      return JSON.parse(localStorage.getItem('tr33via_admin_config') || 'null') || { token: '', owner: '', repo: '' }
     } catch { return { token: '', owner: '', repo: '' } }
   })
-  const [configSaved, setConfigSaved] = useState(
-    () => !!(localStorage.getItem('tr33via_admin_config'))
-  )
-  const [configOpen, setConfigOpen] = useState(
-    () => !(localStorage.getItem('tr33via_admin_config'))
-  )
+  const [configSaved, setConfigSaved] = useState(() => !!(localStorage.getItem('tr33via_admin_config')))
+  const [configOpen, setConfigOpen] = useState(() => !(localStorage.getItem('tr33via_admin_config')))
 
-  // ── Form state ──
+  // ── New article form ──
   const [mdFile, setMdFile] = useState(null)
   const [imgFile, setImgFile] = useState(null)
   const [imgPreviewUrl, setImgPreviewUrl] = useState(null)
   const [tags, setTags] = useState('')
   const [category, setCategory] = useState(CATEGORIES[0])
   const [publishDate, setPublishDate] = useState(getCurrentMonthYear())
-
-  // ── Parsed preview ──
   const [parsed, setParsed] = useState(null)
   const [rawMd, setRawMd] = useState('')
 
-  // ── Publish state ──
+  // ── Publish / status ──
   const [status, setStatus] = useState('idle') // idle | publishing | success | error
   const [statusMsg, setStatusMsg] = useState('')
+
+  // ── Preview modal ──
+  const [showPreview, setShowPreview] = useState(false)
+  const [previewMd, setPreviewMd] = useState('')
+  const [previewAccepted, setPreviewAccepted] = useState(false)
+
+  // ── Edit existing ──
+  const [editOpen, setEditOpen] = useState(false)
+  const [loadingExisting, setLoadingExisting] = useState(false)
+  const [existingArticles, setExistingArticles] = useState([])
+  const [editMode, setEditMode] = useState(false)
+  const [editArticleId, setEditArticleId] = useState(null)
 
   const mdInputRef = useRef()
   const imgInputRef = useRef()
 
-  // ── Handlers ──
+  // Reset preview-accepted whenever the markdown content changes
+  useEffect(() => {
+    setPreviewAccepted(false)
+  }, [rawMd])
+
+  // ── Config handlers ──
 
   function saveConfig() {
     if (!config.token || !config.owner || !config.repo) {
@@ -173,16 +257,20 @@ export default function AdminControl() {
     setConfig({ token: '', owner: '', repo: '' })
   }
 
+  // ── File handlers ──
+
   function handleMdFile(e) {
     const file = e.target.files?.[0]
     if (!file) return
     setMdFile(file)
     const reader = new FileReader()
     reader.onload = (ev) => {
-      const raw = ev.target.result
-      const cleaned = processMarkdown(raw)
+      const cleaned = processMarkdown(ev.target.result)
       setRawMd(cleaned)
       setParsed(parseArticle(cleaned))
+      setEditMode(false)
+      setEditArticleId(null)
+      setPreviewAccepted(false)
     }
     reader.readAsText(file)
   }
@@ -197,23 +285,86 @@ export default function AdminControl() {
   const handleMdDrop = useCallback((e) => {
     e.preventDefault()
     const file = e.dataTransfer.files?.[0]
-    if (file && file.name.endsWith('.md')) {
-      handleMdFile({ target: { files: [file] } })
-    }
+    if (file && file.name.endsWith('.md')) handleMdFile({ target: { files: [file] } })
   }, [])
 
   const handleImgDrop = useCallback((e) => {
     e.preventDefault()
     const file = e.dataTransfer.files?.[0]
-    if (file && file.type.startsWith('image/')) {
-      handleImgFile({ target: { files: [file] } })
-    }
+    if (file && file.type.startsWith('image/')) handleImgFile({ target: { files: [file] } })
   }, [])
+
+  // ── Preview modal handlers ──
+
+  function openPreview() {
+    if (!parsed || !rawMd) return
+    setPreviewMd(rawMd)
+    setShowPreview(true)
+  }
+
+  function acceptPreview() {
+    // Sync any edits made in the preview back to rawMd
+    setRawMd(previewMd)
+    setParsed(parseArticle(previewMd))
+    setPreviewAccepted(true)
+    setShowPreview(false)
+  }
+
+  function cancelPreview() {
+    setShowPreview(false)
+  }
+
+  // ── Edit existing handlers ──
+
+  async function loadExistingArticles() {
+    if (!configSaved) {
+      alert('Please save your GitHub config first.')
+      setConfigOpen(true)
+      return
+    }
+    setLoadingExisting(true)
+    try {
+      const { articles } = await fetchExistingArticles(config)
+      setExistingArticles(articles)
+      setEditOpen(true)
+    } catch (err) {
+      alert(`Failed to load articles: ${err.message}`)
+    } finally {
+      setLoadingExisting(false)
+    }
+  }
+
+  function startEdit(article) {
+    setRawMd(article.content || '')
+    setParsed({
+      title: article.title,
+      subtitle: article.subtitle,
+      wordCount: article.wordCount || (article.content || '').split(/\s+/).filter(Boolean).length,
+      readTime: article.readTime,
+      id: article.id,
+    })
+    setTags((article.keywords || []).join(', '))
+    setCategory(article.category || CATEGORIES[0])
+    setPublishDate(article.publishDate || getCurrentMonthYear())
+    setEditMode(true)
+    setEditArticleId(article.id)
+    setPreviewAccepted(false)
+    setMdFile(null)
+    setImgFile(null)
+    setImgPreviewUrl(null)
+    setStatus('idle')
+    setStatusMsg('')
+    // Scroll up to the upload section
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  // ── Publish ──
 
   async function publish() {
     if (!parsed || !rawMd) { alert('Please upload a markdown file first.'); return }
-    if (!config.token || !config.owner || !config.repo) {
-      alert('GitHub config is missing. Please save your config first.')
+    if (!previewAccepted) { alert('Please preview the article first and click Accept.'); openPreview(); return }
+    if (!configSaved) {
+      alert('GitHub config is missing.')
       setConfigOpen(true)
       return
     }
@@ -225,7 +376,7 @@ export default function AdminControl() {
       const { token, owner, repo } = config
       const repoPath = `${owner}/${repo}`
 
-      // ── Step 1: Upload image (if provided) ──
+      // ── Upload image ──
       let imagePath = null
       if (imgFile) {
         setStatusMsg('Uploading image…')
@@ -234,41 +385,41 @@ export default function AdminControl() {
         imagePath = `/images/${parsed.id}.${ext}`
         const imgB64 = await fileToBase64(imgFile)
 
-        // Check if image already exists (get SHA)
-        let existingSha = undefined
+        let existingImgSha
         try {
           const existing = await ghGet(`${repoPath}/contents/${imgFileName}`, token)
-          existingSha = existing.sha
+          existingImgSha = existing.sha
         } catch {}
 
         await ghPut(`${repoPath}/contents/${imgFileName}`, token, {
           message: `admin: add image for "${parsed.title}"`,
           content: imgB64,
-          ...(existingSha ? { sha: existingSha } : {}),
+          ...(existingImgSha ? { sha: existingImgSha } : {}),
         })
+      } else if (editMode) {
+        // Keep existing image path from the article being edited
+        const existing = existingArticles.find(a => a.id === editArticleId)
+        imagePath = existing?.image || null
       }
 
-      // ── Step 2: Read current articles-cms.json ──
+      // ── Read current articles-cms.json ──
       setStatusMsg('Reading articles database…')
       const cmsFilePath = `${repoPath}/contents/src/data/articles-cms.json`
-      let existingArticles = []
-      let cmsSha = undefined
+      let existingArr = []
+      let cmsSha
 
       try {
         const cmsData = await ghGet(cmsFilePath, token)
         cmsSha = cmsData.sha
-        const decoded = atob(cmsData.content.replace(/\s/g, ''))
-        existingArticles = JSON.parse(decoded)
-      } catch (err) {
-        // File may not exist yet or be empty — start fresh
-        existingArticles = []
-      }
+        existingArr = JSON.parse(atob(cmsData.content.replace(/\s/g, '')))
+      } catch {}
 
-      // ── Step 3: Build new article object ──
-      const keywordsArr = tags
-        .split(',')
-        .map(t => t.trim())
-        .filter(Boolean)
+      // ── Build article object ──
+      const keywordsArr = tags.split(',').map(t => t.trim()).filter(Boolean)
+
+      // Pick a gradient (cycle through options based on article count)
+      const gradientIdx = existingArr.length % GRADIENTS.length
+      const existingArticleForEdit = editMode ? existingArr.find(a => a.id === editArticleId) : null
 
       const newArticle = {
         id: parsed.id,
@@ -280,29 +431,43 @@ export default function AdminControl() {
         readTime: parsed.readTime,
         wordCount: parsed.wordCount,
         publishDate,
-        themeGradient: DEFAULT_GRADIENT,
+        themeGradient: existingArticleForEdit?.themeGradient || GRADIENTS[gradientIdx],
         image: imagePath,
         content: rawMd,
       }
 
-      // Prepend new article (newest first), avoid duplicate IDs
-      const updated = [
-        newArticle,
-        ...existingArticles.filter(a => a.id !== newArticle.id),
-      ]
+      // ── Merge into array ──
+      let updated
+      if (editMode) {
+        // Replace the article with matching ID, preserve position
+        updated = existingArr.map(a => a.id === editArticleId ? newArticle : a)
+        // If not found (shouldn't happen), prepend
+        if (!existingArr.find(a => a.id === editArticleId)) {
+          updated = [newArticle, ...existingArr]
+        }
+      } else {
+        // New article: prepend, deduplicate by ID
+        updated = [newArticle, ...existingArr.filter(a => a.id !== newArticle.id)]
+      }
 
-      // ── Step 4: Write updated articles-cms.json ──
-      setStatusMsg('Publishing article…')
+      // ── Write articles-cms.json ──
+      setStatusMsg(editMode ? 'Saving changes…' : 'Publishing article…')
       const newContent = btoa(unescape(encodeURIComponent(JSON.stringify(updated, null, 2))))
 
       await ghPut(cmsFilePath, token, {
-        message: `admin: publish "${parsed.title}"`,
+        message: editMode
+          ? `admin: update "${parsed.title}"`
+          : `admin: publish "${parsed.title}"`,
         content: newContent,
         ...(cmsSha ? { sha: cmsSha } : {}),
       })
 
       setStatus('success')
-      setStatusMsg(`"${parsed.title}" published! Vercel will deploy in ~60 seconds.`)
+      setStatusMsg(
+        editMode
+          ? `"${parsed.title}" updated! Vercel will deploy in ~60 seconds.`
+          : `"${parsed.title}" published! Vercel will deploy in ~60 seconds.`
+      )
 
       // Reset form
       setMdFile(null)
@@ -312,6 +477,10 @@ export default function AdminControl() {
       setRawMd('')
       setTags('')
       setPublishDate(getCurrentMonthYear())
+      setPreviewAccepted(false)
+      setEditMode(false)
+      setEditArticleId(null)
+      setExistingArticles([])
 
     } catch (err) {
       setStatus('error')
@@ -319,11 +488,54 @@ export default function AdminControl() {
     }
   }
 
-  // ── Render ──
+  // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <div className="admin-page">
-      {/* Header */}
+
+      {/* ── Preview Modal ── */}
+      {showPreview && (
+        <div className="preview-modal-overlay" onClick={cancelPreview}>
+          <div className="preview-modal" onClick={e => e.stopPropagation()}>
+            <div className="preview-modal-header">
+              <span className="preview-modal-title">Article Preview</span>
+              <span className="preview-modal-hint">Edit on the left · Live preview on the right</span>
+              <button className="preview-modal-close" onClick={cancelPreview}>✕</button>
+            </div>
+            <div className="preview-modal-body">
+              {/* Left: editable markdown */}
+              <div className="preview-panel preview-panel--editor">
+                <div className="preview-panel-label">Markdown Source</div>
+                <textarea
+                  className="preview-editor"
+                  value={previewMd}
+                  onChange={e => setPreviewMd(e.target.value)}
+                  spellCheck={false}
+                />
+              </div>
+              {/* Right: live rendered preview */}
+              <div className="preview-panel preview-panel--render">
+                <div className="preview-panel-label">Live Render</div>
+                <div className="preview-render-scroll">
+                  <div className="article-body preview-article-body">
+                    <ReactMarkdown>{previewMd}</ReactMarkdown>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="preview-modal-footer">
+              <button className="admin-btn-ghost" onClick={cancelPreview}>
+                Cancel
+              </button>
+              <button className="admin-btn-primary preview-accept-btn" onClick={acceptPreview}>
+                ✓ Accept & Enable Publish
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Header ── */}
       <header className="admin-header">
         <div className="admin-header-inner">
           <button className="admin-back" onClick={() => navigate('/')}>← Vault</button>
@@ -342,10 +554,7 @@ export default function AdminControl() {
 
         {/* ── GitHub Config ── */}
         <section className="admin-section">
-          <div
-            className="admin-section-head"
-            onClick={() => setConfigOpen(o => !o)}
-          >
+          <div className="admin-section-head" onClick={() => setConfigOpen(o => !o)}>
             <span className="admin-section-label">
               {configSaved ? '✓ GitHub Connected' : '⚙ GitHub Config'}
             </span>
@@ -356,16 +565,11 @@ export default function AdminControl() {
             <div className="admin-config-form">
               <p className="admin-hint">
                 Create a GitHub{' '}
-                <a
-                  href="https://github.com/settings/tokens/new?scopes=repo&description=tr33via-admin"
-                  target="_blank"
-                  rel="noreferrer"
-                >
+                <a href="https://github.com/settings/tokens/new?scopes=repo&description=tr33via-admin" target="_blank" rel="noreferrer">
                   Personal Access Token
-                </a>
-                {' '}with <code>repo</code> scope. It's stored only in your browser.
+                </a>{' '}
+                with <code>repo</code> scope. Stored only in your browser's localStorage.
               </p>
-
               <div className="admin-field">
                 <label>Personal Access Token (PAT)</label>
                 <input
@@ -389,56 +593,108 @@ export default function AdminControl() {
                   <label>Repository Name</label>
                   <input
                     type="text"
-                    placeholder="tr33via"
+                    placeholder="Trivia-Vault"
                     value={config.repo}
                     onChange={e => setConfig(c => ({ ...c, repo: e.target.value }))}
                   />
                 </div>
               </div>
               <div className="admin-config-actions">
-                <button className="admin-btn-primary" onClick={saveConfig}>
-                  Save Config
-                </button>
-                {configSaved && (
-                  <button className="admin-btn-ghost" onClick={clearConfig}>
-                    Clear
-                  </button>
-                )}
+                <button className="admin-btn-primary" onClick={saveConfig}>Save Config</button>
+                {configSaved && <button className="admin-btn-ghost" onClick={clearConfig}>Clear</button>}
               </div>
             </div>
           )}
         </section>
 
-        {/* ── Upload Form ── */}
+        {/* ── Edit Existing Articles ── */}
+        <section className="admin-section">
+          <div
+            className="admin-section-head"
+            onClick={() => editOpen ? setEditOpen(false) : loadExistingArticles()}
+          >
+            <span className="admin-section-label">
+              {loadingExisting ? '⟳ Loading…' : '✎ Edit Existing Articles'}
+            </span>
+            <span className="admin-toggle-icon">{editOpen ? '▲' : '▼'}</span>
+          </div>
+
+          {editOpen && (
+            <div className="admin-edit-list">
+              {existingArticles.length === 0 ? (
+                <p className="admin-hint" style={{ padding: '20px 24px' }}>
+                  No articles found in articles-cms.json.
+                </p>
+              ) : (
+                existingArticles.map(article => (
+                  <div key={article.id} className="admin-edit-row">
+                    <div className="admin-edit-info">
+                      <span className="admin-edit-title">{article.title}</span>
+                      <span className="admin-edit-meta">
+                        {article.category} · {article.publishDate} · {article.readTime}
+                      </span>
+                    </div>
+                    <button
+                      className="admin-btn-ghost admin-edit-btn"
+                      onClick={() => startEdit(article)}
+                    >
+                      Edit →
+                    </button>
+                  </div>
+                ))
+              )}
+              <div className="admin-edit-refresh">
+                <button className="admin-btn-ghost" onClick={loadExistingArticles} disabled={loadingExisting}>
+                  {loadingExisting ? 'Loading…' : '↺ Refresh List'}
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* ── Upload / New Article Form ── */}
         <section className="admin-section">
           <div className="admin-section-head static">
-            <span className="admin-section-label">New Article</span>
+            <span className="admin-section-label">
+              {editMode ? `✎ Editing: ${parsed?.title || editArticleId}` : 'New Article'}
+            </span>
+            {editMode && (
+              <button
+                className="admin-btn-ghost"
+                style={{ fontSize: '10px', padding: '4px 10px' }}
+                onClick={() => {
+                  setEditMode(false); setEditArticleId(null)
+                  setRawMd(''); setParsed(null); setMdFile(null)
+                  setImgFile(null); setImgPreviewUrl(null)
+                  setTags(''); setPublishDate(getCurrentMonthYear())
+                  setPreviewAccepted(false)
+                }}
+              >
+                Cancel Edit
+              </button>
+            )}
           </div>
 
           <div className="admin-upload-grid">
             {/* Markdown drop zone */}
             <div
-              className={`admin-dropzone${mdFile ? ' has-file' : ''}`}
+              className={`admin-dropzone${mdFile || (editMode && rawMd) ? ' has-file' : ''}`}
               onDrop={handleMdDrop}
               onDragOver={e => e.preventDefault()}
               onClick={() => mdInputRef.current?.click()}
             >
-              <input
-                ref={mdInputRef}
-                type="file"
-                accept=".md"
-                style={{ display: 'none' }}
-                onChange={handleMdFile}
-              />
+              <input ref={mdInputRef} type="file" accept=".md" style={{ display: 'none' }} onChange={handleMdFile} />
               {mdFile ? (
                 <div className="dropzone-filled">
                   <span className="dropzone-icon">📄</span>
                   <span className="dropzone-filename">{mdFile.name}</span>
-                  {parsed && (
-                    <span className="dropzone-meta">
-                      {parsed.wordCount.toLocaleString()} words · {parsed.readTime}
-                    </span>
-                  )}
+                  {parsed && <span className="dropzone-meta">{parsed.wordCount.toLocaleString()} words · {parsed.readTime}</span>}
+                </div>
+              ) : editMode && rawMd ? (
+                <div className="dropzone-filled">
+                  <span className="dropzone-icon">📄</span>
+                  <span className="dropzone-filename">Loaded from existing article</span>
+                  <span className="dropzone-meta">{parsed?.wordCount?.toLocaleString()} words · Drop new .md to replace</span>
                 </div>
               ) : (
                 <div className="dropzone-empty">
@@ -456,17 +712,17 @@ export default function AdminControl() {
               onDragOver={e => e.preventDefault()}
               onClick={() => imgInputRef.current?.click()}
             >
-              <input
-                ref={imgInputRef}
-                type="file"
-                accept="image/*"
-                style={{ display: 'none' }}
-                onChange={handleImgFile}
-              />
+              <input ref={imgInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImgFile} />
               {imgPreviewUrl ? (
                 <div className="dropzone-img-preview">
                   <img src={imgPreviewUrl} alt="Cover preview" />
                   <span className="dropzone-filename">{imgFile?.name}</span>
+                </div>
+              ) : editMode ? (
+                <div className="dropzone-empty">
+                  <span className="dropzone-icon">🖼</span>
+                  <span className="dropzone-label">Drop new cover image</span>
+                  <span className="dropzone-sub">Leave empty to keep existing image</span>
                 </div>
               ) : (
                 <div className="dropzone-empty">
@@ -478,36 +734,31 @@ export default function AdminControl() {
             </div>
           </div>
 
-          {/* Parsed preview */}
+          {/* Parsed preview strip */}
           {parsed && (
             <div className="admin-preview">
               <div className="admin-preview-label">Parsed Preview</div>
               <div className="admin-preview-title">{parsed.title}</div>
-              {parsed.subtitle && (
-                <div className="admin-preview-subtitle">{parsed.subtitle}</div>
-              )}
+              {parsed.subtitle && <div className="admin-preview-subtitle">{parsed.subtitle}</div>}
               <div className="admin-preview-meta">
                 <span>ID: <code>{parsed.id}</code></span>
                 <span>·</span>
                 <span>{parsed.wordCount.toLocaleString()} words</span>
                 <span>·</span>
                 <span>{parsed.readTime}</span>
+                {previewAccepted && <span>·</span>}
+                {previewAccepted && <span style={{ color: 'var(--accent-gold)' }}>✓ Preview accepted</span>}
               </div>
             </div>
           )}
 
-          {/* Article metadata */}
+          {/* Metadata form */}
           <div className="admin-meta-form">
             <div className="admin-fields-row">
               <div className="admin-field">
                 <label>Category</label>
-                <select
-                  value={category}
-                  onChange={e => setCategory(e.target.value)}
-                >
-                  {CATEGORIES.map(c => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
+                <select value={category} onChange={e => setCategory(e.target.value)}>
+                  {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
               <div className="admin-field">
@@ -520,52 +771,57 @@ export default function AdminControl() {
                 />
               </div>
             </div>
-
             <div className="admin-field">
               <label>Tags <span className="admin-hint-inline">(comma-separated)</span></label>
               <input
                 type="text"
                 value={tags}
                 onChange={e => setTags(e.target.value)}
-                placeholder="e.g. OpenAI, GPT-5, AGI, Artificial Intelligence"
+                placeholder="e.g. Tesla, Autopilot, AI, Self-Driving"
               />
             </div>
           </div>
         </section>
 
-        {/* ── Publish Button & Status ── */}
+        {/* ── Preview & Publish ── */}
         <section className="admin-publish-section">
-          {status === 'success' && (
-            <div className="admin-status success">
-              ✓ {statusMsg}
-            </div>
-          )}
-          {status === 'error' && (
-            <div className="admin-status error">
-              ✕ {statusMsg}
-            </div>
-          )}
-          {status === 'publishing' && (
-            <div className="admin-status publishing">
-              ⟳ {statusMsg}
-            </div>
-          )}
+          {status === 'success' && <div className="admin-status success">✓ {statusMsg}</div>}
+          {status === 'error' && <div className="admin-status error">✕ {statusMsg}</div>}
+          {status === 'publishing' && <div className="admin-status publishing">⟳ {statusMsg}</div>}
 
-          <button
-            className={`admin-publish-btn${status === 'publishing' ? ' loading' : ''}`}
-            onClick={publish}
-            disabled={status === 'publishing' || !parsed}
-          >
-            {status === 'publishing' ? 'Publishing…' : 'Publish to Vault →'}
-          </button>
+          <div className="admin-publish-actions">
+            <button
+              className="admin-btn-ghost admin-preview-btn"
+              onClick={openPreview}
+              disabled={!parsed}
+            >
+              Preview Article →
+            </button>
 
-          {!configSaved && (
-            <p className="admin-warn">
-              ⚠ GitHub config not saved. Article will not be published until config is set.
+            <button
+              className={`admin-publish-btn${status === 'publishing' ? ' loading' : ''}${!previewAccepted ? ' locked' : ''}`}
+              onClick={publish}
+              disabled={status === 'publishing' || !parsed || !previewAccepted}
+              title={!previewAccepted ? 'Preview the article first and click Accept' : ''}
+            >
+              {status === 'publishing'
+                ? 'Publishing…'
+                : editMode
+                ? 'Save Changes →'
+                : 'Publish to Vault →'}
+            </button>
+          </div>
+
+          {!previewAccepted && parsed && (
+            <p className="admin-warn-soft">
+              Preview the article first. The publish button unlocks after you accept the preview.
             </p>
           )}
           {!parsed && status === 'idle' && (
-            <p className="admin-warn-soft">Upload a markdown file to enable publishing.</p>
+            <p className="admin-warn-soft">Upload a markdown file to get started.</p>
+          )}
+          {!configSaved && (
+            <p className="admin-warn">⚠ GitHub config not saved — article cannot be published.</p>
           )}
         </section>
 
@@ -575,16 +831,18 @@ export default function AdminControl() {
             <span className="admin-section-label">How it works</span>
           </div>
           <ol className="admin-how-list">
-            <li>Upload your <code>.md</code> article and cover image above.</li>
-            <li>Set the category, tags, and publish date.</li>
-            <li>Click <strong>Publish to Vault</strong>.</li>
-            <li>The app commits the article and image directly to your GitHub repo via API.</li>
+            <li>Upload your <code>.md</code> article and a cover image above.</li>
+            <li>Set category, tags, and publish date. Click <strong>Preview Article</strong>.</li>
+            <li>Review and edit the content in the split-view preview. Accept when ready.</li>
+            <li>Click <strong>Publish to Vault</strong>. The app commits directly to your GitHub repo via API.</li>
             <li>Vercel/Netlify detects the commit and auto-deploys in ~60 seconds.</li>
-            <li>The article is live for all visitors — no terminal, no git push required.</li>
+            <li>The article is live — no terminal, no git push required.</li>
           </ol>
           <p className="admin-info-note">
-            Your GitHub token is stored only in this browser's localStorage and never sent
-            anywhere except GitHub's API. The admin page has no backend.
+            Supports multiple document formats: Perplexity-style (with prompt header above <code>***</code>),
+            clean format (with decorative <code>***</code> opener, bold-wrapped title, inline citations <code>[^1]</code>,
+            and <code>## References</code> section). All are automatically stripped.
+            Your GitHub token is stored only in this browser's localStorage.
           </p>
         </section>
 
