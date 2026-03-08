@@ -488,6 +488,16 @@ export default function AdminControl() {
     }
   }
 
+  // ── Computed preview values ──────────────────────────────────────────────────
+
+  // Parse title/subtitle live from the editable markdown (only when modal open)
+  const previewParsed = showPreview ? parseArticle(previewMd) : null
+
+  // Hero background for preview: uploaded image > existing article image > gradient
+  const editingArticle = editMode ? existingArticles.find(a => a.id === editArticleId) : null
+  const heroImage = imgPreviewUrl || (editingArticle?.image || null)
+  const heroGradient = editingArticle?.themeGradient || GRADIENTS[0]
+
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
@@ -513,13 +523,54 @@ export default function AdminControl() {
                   spellCheck={false}
                 />
               </div>
-              {/* Right: live rendered preview */}
+              {/* Right: full article page simulation */}
               <div className="preview-panel preview-panel--render">
-                <div className="preview-panel-label">Live Render</div>
+                <div className="preview-panel-label">Live Render — Full Article View</div>
                 <div className="preview-render-scroll">
-                  <div className="article-body preview-article-body">
-                    <ReactMarkdown>{previewMd}</ReactMarkdown>
+
+                  {/* ── Simulated Hero ── */}
+                  <div
+                    className="preview-hero"
+                    style={
+                      heroImage
+                        ? { backgroundImage: `url(${heroImage})` }
+                        : { background: heroGradient }
+                    }
+                  >
+                    {/* Bottom fade overlay */}
+                    <div className="preview-hero-fade" />
+                    {/* Dark tint for image backgrounds */}
+                    {heroImage && <div className="preview-hero-tint" />}
+
+                    <div className="preview-hero-content">
+                      <span className="preview-hero-category">{category}</span>
+                      <h1 className="preview-hero-title">
+                        {previewParsed?.title || parsed?.title || 'Untitled'}
+                      </h1>
+                      {(previewParsed?.subtitle || parsed?.subtitle) && (
+                        <p className="preview-hero-subtitle">
+                          {previewParsed?.subtitle || parsed?.subtitle}
+                        </p>
+                      )}
+                      <div className="preview-hero-meta">
+                        <span>📖 {(previewParsed?.wordCount || parsed?.wordCount || 0).toLocaleString()} words</span>
+                        <span className="preview-hero-meta-dot">·</span>
+                        <span>{previewParsed?.readTime || parsed?.readTime}</span>
+                        <span className="preview-hero-meta-dot">·</span>
+                        <span>{publishDate}</span>
+                        <span className="preview-hero-meta-dot">·</span>
+                        <span>{category}</span>
+                      </div>
+                    </div>
                   </div>
+
+                  {/* ── Article Body ── */}
+                  <div className="preview-body-wrap">
+                    <div className="article-body preview-article-body">
+                      <ReactMarkdown>{previewMd}</ReactMarkdown>
+                    </div>
+                  </div>
+
                 </div>
               </div>
             </div>
