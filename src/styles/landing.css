@@ -7,8 +7,10 @@
   position: sticky;
   top: 0;
   z-index: 100;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
+  background: rgba(12, 10, 10, 0.72);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-bottom: 1px solid rgba(42, 32, 32, 0.6);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -250,7 +252,7 @@
 
 /* === VAULT SECTION === */
 .vault-section {
-  padding: 88px 60px;
+  padding: 44px 60px 88px;
   max-width: 1440px;
   margin: 0 auto;
 }
@@ -352,6 +354,7 @@
   overflow: hidden;
 }
 
+/* Gold left-accent bar — animates on hover/spotlight */
 .article-card::before {
   content: '';
   position: absolute;
@@ -368,8 +371,12 @@
 
 .article-card:hover {
   transform: translateY(-5px);
-  box-shadow: 0 16px 48px rgba(0,0,0,0.45);
-  border-color: rgba(42,32,32,0.9);
+  /* All-4-sides gold outline + depth shadow */
+  box-shadow:
+    0 0 0 1.5px var(--accent-gold),
+    0 0 18px rgba(212,118,10,0.18),
+    0 16px 48px rgba(0,0,0,0.45);
+  border-color: transparent;
 }
 
 .article-card:hover::before,
@@ -378,8 +385,11 @@
 }
 
 .article-card.spotlight-active {
-  border-color: rgba(212,118,10,0.6);
-  box-shadow: 0 0 0 1px rgba(212,118,10,0.2), 0 8px 32px rgba(212,118,10,0.1);
+  border-color: transparent;
+  box-shadow:
+    0 0 0 1.5px var(--accent-gold),
+    0 0 14px rgba(212,118,10,0.15),
+    0 8px 32px rgba(212,118,10,0.1);
 }
 
 .card-image {
@@ -593,7 +603,7 @@
   .spotlight-image-card { max-width: 540px; }
   .spotlight-info { align-items: center; }
   .spotlight-title { font-size: 40px; }
-  .vault-section { padding: 72px 48px; }
+  .vault-section { padding: 36px 48px 72px; }
   .footer-inner { grid-template-columns: 1fr 1fr; }
   .footer { padding: 48px 48px 32px; }
 }
@@ -608,7 +618,7 @@
   .spotlight-subtitle { font-size: 15px; }
   .spotlight-desc { -webkit-line-clamp: 2; }
 
-  .vault-section { padding: 56px 20px; }
+  .vault-section { padding: 28px 20px 56px; }
   .card-grid { grid-template-columns: 1fr; }
 
   .footer { padding: 40px 20px 28px; }
